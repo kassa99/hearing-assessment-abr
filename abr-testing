@@ -1,0 +1,118 @@
+import numpy as np
+from scipy import signal
+import pyaudio
+import time
+import matplotlib.pyplot as plt
+import pandas as pd
+
+
+# Define parameters
+T = 0.04  # Duration in seconds
+rft = 0.001 #rise/fall time
+fs = 192000  # Sampling rate in Hz
+freqs = [8000] # Frequencies to be tested (in Hz)
+db_levels = [90,80,70,60,50,40,30,20] # Test only at 90 dB SPL
+n_measurements = 1024 # Number of measurements to be taken for each dB SPL level
+#delay = 0.2 # Delay in seconds after recording to ensure complete recording
+
+# Initialize PyAudio
+p = pyaudio.PyAudio()
+
+# Create a dictionary to store the averaged data for each intensity level
+averaged_data_dict = {}
+
+# Specify the input device index of the external soundcard
+input_device_index =4 # Change this index to match your external soundcard's input device index
+
+# Loop over dB SPL levels
+for db_level in db_levels:
+   
+    # Calculate RMS amplitude of the toneburst for the specified dB SPL level
+    p_ref = 20e-6 # Reference sound pressure level (in Pa)
+    amplitude = np.sqrt(2) * p_ref * 10**(db_level/20) # Amplitude (RMS) for 90 dB SPL relative to 20 microPascals
+
+    # Generate time vector
+    t = np.arange(0, T, 1/fs) # Time vector
+
+    # Generate Gaussian envelope
+    sigma = rft / np.sqrt(2 * np.log(2))
+    envelope = np.exp(-((t - 0.01) ** 2) / (2 * sigma ** 2))
+
+    # Generate sine wave
+    waveform = np.sin(2*np.pi*freqs[0]*t)
+
+    # Multiply sine wave with envelope and amplitude scaling
+    toneburst = amplitude * waveform * envelope[:len(waveform)]
+
+    # Scale toneburst to have maximum amplitude of 1
+    #toneburst = toneburst / np.max(np.abs(toneburst))
+
+    # Open a stream to play the audio signal and record the voltage data from the external soundcard
+    stream = p.open(format=pyaudio.paFloat32,
+                    channels=1,
+                    rate=fs,
+                    input=True,
+                    input_device_index=4, # Specify the input device index
+                    output=True,
+                    frames_per_buffer=len(toneburst))
+   
+    # Initialize an array to store the recorded data for each measurement
+    recorded_data = np.zeros((n_measurements, len(toneburst)))
+   
+    # Loop over measurements
+    for i in range(n_measurements):
+       
+        # Play the toneburst signal and record the voltage data
+        stream.write(toneburst.astype(np.float32).tobytes())
+        data = stream.read(len(toneburst))
+        recorded_data[i] = np.frombuffer(data, dtype=np.float32)
+       
+        # Add a delay to ensure complete recording
+        #time.sleep(delay)
+       
+        # Update the plot with the recorded data for each measurement
+        plt.clf()
+        
+        #plt.plot(t, toneburst, label='Toneburst signal')
+        plt.plot(t, recorded_data[i], label='Recorded data')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Amplitude')
+        plt.title('Recording {}/{} at {} dB SPL'.format(i+1, n_measurements, db_level))
+        plt.legend()
+        #command used in the code to introduce a small delay (0.001 seconds) when updating the plot during the loop over the measurements. This allows the plot to be updated and displayed in real-time as each measurement is recorded
+        plt.pause(0.001)
+
+    # Close the stream
+    stream.stop_stream()
+    stream.close()
+
+    # Calculate the average of the recorded data across all measurements for this dB SPL level
+    averaged_data = np.mean(recorded_data, axis=0)
+
+    # Add the averaged data to the dictionary under the key corresponding to this dB SPL level
+    averaged_data_dict[db_level] = averaged_data
+
+# Terminate PyAudio
+p.terminate()
+
+# Plot the averaged data for each dB SPL level
+fig, axs = plt.subplots(len(db_levels), 1, sharex=True, sharey=True, figsize=(10, 20))
+fig.subplots_adjust(hspace=0.5)
+for i, db_level in enumerate(db_levels):
+    axs[i].plot(t, averaged_data_dict[db_level], color='red', linewidth=2)
+    axs[i].set_title('%d dB SPL' % db_level)
+fig.text(0.5, 0.04, 'Time (s)', ha='center')
+fig.text(0.04, 0.5, 'Amplitude', va='center', rotation='vertical')
+
+# Convert the time vector to milliseconds
+t_ms = t * 1000
+
+# Create a new DataFrame with the time in milliseconds as the index, and dB levels as columns
+averaged_data_df = pd.DataFrame(data=np.column_stack(list(averaged_data_dict.values())), index=t_ms, columns=db_levels)
+
+# Save the raw averaged data to an Excel file
+filename = f"averaged_data_{freqs[0]}Hz.csv"
+averaged_data_df.to_csv(filename, index_label='Time (ms)')
+
+# Terminate PyAudio
+p.terminate()
