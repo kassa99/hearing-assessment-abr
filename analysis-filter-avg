@@ -1,0 +1,208 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Apr 19 19:18:33 2023
+
+@author: andre
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from scipy.optimize import curve_fit
+from scipy.signal import butter, filtfilt
+from scipy.signal import butter, lfilter
+from scipy.signal import correlate
+
+fs = 192000
+data = pd.read_csv('averaged_data_8000Hz (1).csv')
+t = np.linspace(0,40,len(data))
+dB_SPL = [i for i in range(90,10,-10)]
+dB_indices = [i for i in range(0,8)]
+
+# Define a function to average the signal over a window of a given size
+def moving_average(signal, window_size):
+    # Define the window
+    window = np.ones(int(window_size))/float(window_size)
+    # Apply the moving average filter
+    filtered_signal = np.convolve(signal, window, 'same')
+    return filtered_signal
+
+# Define the notch filter function
+def notch_filter(data, fs, f0, Q):
+    # Calculate the notch filter parameters
+    w0 = 2 * np.pi * f0 / fs
+    alpha = np.sin(w0) / (2 * Q)
+
+    # Calculate the filter coefficients using a 4th order Butterworth filter
+    b, a = butter(4, [((2*np.pi*f0/fs) - alpha), ((2*np.pi*f0/fs) + alpha)], 'bandstop')
+
+    # Apply the filter to the data
+    filtered_data = lfilter(b, a, data)
+
+    return filtered_data
+
+# Define bandpass filter
+lowcut = 300 
+highcut = 3000 
+order = 4
+nyq = 0.5 * fs
+low = lowcut / nyq
+high = highcut / nyq
+b, a = butter(order, [low, high], btype='band')
+
+# Create empty dictionaries to store data for each dB
+tone_xkHz = {}
+freq = [32,16,8,4,2]
+for x in freq:
+    locals()[f"tone_{x}kHz"] = {} # locals() separates the dicts into distinct variables
+del(tone_xkHz)
+    
+for m in range(0,5):
+    tone_dict = {}
+    for i, x in enumerate(dB_indices):
+        dB_data = data.iloc[:,i+1]
+        # if m == 0:
+        #     # extracts data from the ith row, from the 8th column to just
+        #     # before the end of the sheet to avoid the empty space
+        #     dB_data = data.iloc[:,i]
+        # elif m == 1:
+        #     # on the next loop, grabs data 15 rows lower to get next freq
+        #     dB_data = data.loc[(i*m)+15].values[7:-1]
+        # elif m not in [0,1]:
+        #     # same idea but for every loop afterward
+        #     dB_data = data.loc[i+(m*15)].values[7:-1]
+        tone_dict[f"{dB_SPL[i]} dB"] = dB_data
+    locals()[f"tone_{freq[m]}kHz"] = tone_dict
+    
+del(tone_dict)
+
+averaged_signals = {}
+key_list = [key for key in vars() if key.startswith("tone_") and key.endswith("kHz")]
+for key in key_list:
+    tone_dict = {}
+    for subkey in vars()[key]:
+        # Apply moving average to each dB set in the tone_xkHz dictionary
+        cleansig = moving_average(vars()[key][subkey], 200)
+        tone_dict[subkey] = cleansig
+    averaged_signals[key] = tone_dict
+
+# Apply notch filter
+# fs = 192000  # Sampling rate in Hz
+f0 = 60  # Notch frequency in Hz
+Q = 30  # Quality factor
+# filtered_data = notch_filter(averaged_signals['tone_32kHz']['90 dB'], fs, f0, Q)
+
+# # Apply bandpass filter to data
+# data_filtered = filtfilt(b, a, averaged_signals['tone_32kHz']['90 dB'])
+
+# # Remove baseline drift
+# baseline = np.mean(data_filtered[:int(0.01*fs)])
+# data_detrended = data_filtered - baseline
+
+#%%
+# # Define template waveform
+# template = np.array([0, 0, 0.25, 0.5, 0.75, 1, 0.75, 0.5, 0.25, 0, 0])
+
+# # Apply template matching to each trial
+# correlations = []
+# for trial in clean_trials:
+#     # Normalize trial waveform
+#     trial_norm = (trial - np.mean(trial)) / np.std(trial)
+    
+#     # Calculate cross-correlation with template waveform
+#     corr = correlate(trial_norm, template, mode='valid')
+    
+#     # Save maximum correlation coefficient and corresponding time lag
+#     max_corr = np.max(corr)
+#     max_lag = np.argmax(corr)
+    
+#     correlations.append((max_corr, max_lag))
+
+# # Extract latency and amplitude data from correlations
+# latencies = np.array([c[1] for c in correlations]) / fs # convert lag to time (in seconds)
+# amplitudes = np.array([c[0] for c in correlations])
+
+#%%
+# Apply notch filter, bandpass filter, and remove baseline drift to each subkey in the tone_xkHz dictionaries
+processed_signals = {}
+for key in key_list:
+    tone_dict = {}
+    for subkey in vars()[key]:
+        # Apply notch filter to the signal
+        notch_filtered = notch_filter(averaged_signals[key][subkey], fs, f0, Q)
+        
+        # Apply bandpass filter to the signal
+        bandpass_filtered = filtfilt(b, a, averaged_signals[key][subkey])
+        
+        # Remove baseline drift from the signal
+        baseline = np.mean(bandpass_filtered[:int(0.01*fs)])
+        detrended = bandpass_filtered - baseline
+        
+        tone_dict[subkey] = detrended
+        
+    # Store the processed signals for each tone frequency in a dictionary
+    processed_signals[key] = tone_dict
+
+#%%
+# for key in processed_signals:
+#     num_plots = len(processed_signals[key])
+#     num_cols = 2
+#     num_rows = (num_plots + num_cols - 1) // num_cols
+#     fig, axes = plt.subplots(nrows=num_rows, ncols=num_cols, figsize=(12, 8))
+#     fig.suptitle(key)
+#     for i, subkey in enumerate(processed_signals[key]):
+#         row = i // num_cols
+#         col = i % num_cols
+#         ax = axes[row, col]
+#         ax.plot(t, processed_signals[key][subkey])
+#         ax.set_ylabel('Amplitude (uV)')
+#         if key[6] != 'k':
+#             slice_end = 7
+#         else:
+#             slice_end = 6
+#         ax.set_title(f"Processed {key[5:slice_end]} kHz ABR Waveform, {subkey} SPL")
+#         ax.set_xlabel('Time (ms)')
+#     fig.tight_layout()
+#     plt.show()
+    
+# for i in range(0,4):
+#     plt.figure(i)
+#     plt.plot(t,processed_signals['tone_32kHz']['90 dB'])
+#     plt.ylabel('Amplitude (uV)'), plt.title('Processed ABR Waveform at 32 kHz, 90 dB SPL '), plt.xlabel('Time (ms')
+#     plt.tight_layout()
+#     plt.show()
+
+# for key in processed_signals:
+#     plt.figure(key)
+#     for i, subkey in enumerate(processed_signals[key]):
+#         plt.subplot(3,5,i+1)
+#         plt.plot(t, processed_signals[key][subkey])
+#         plt.ylabel('Amplitude (uV)')
+#         if key[6] != 'k':
+#             slice_end = 7
+#         else:
+#             slice_end = 6
+#         plt.title(f"Processed {key[5:slice_end]} kHz ABR Waveform, {subkey} SPL")
+#         plt.xlabel('Time (ms)')
+#         plt.tight_layout()
+#     plt.show()
+
+plt.figure(1)
+plt.subplot(1,2,1)
+plt.plot(t,tone_32kHz['90 dB'])
+plt.xlabel('Time (ms)')
+plt.ylabel('Amplitude (V)')
+plt.title('Raw 8kHz, 90 dB')
+
+plt.subplot(1,2,2)
+plt.plot(t,processed_signals['tone_32kHz']['90 dB'])
+plt.xlabel('Time (ms)')
+plt.ylabel('Amplitude (V)')
+plt.title('Averaged and Filtered 8 kHz, 90 dB')
+plt.tight_layout()
+plt.show()
+
+# plt.plot(t, averaged_signals['tone_32kHz']['90 dB'])
+# plt.show()
+
+# plt.plot(t,processed_signals['tone_4kHz']['60 dB'])
