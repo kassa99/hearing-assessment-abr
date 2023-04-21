@@ -1,0 +1,132 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import butter, filtfilt, find_peaks
+import tkinter as tk
+from tkinter import filedialog
+
+def filter_signal(signal, fs):
+    # Define the filter parameters
+    lowcut = 300.0
+    highcut = 3000.0
+    order = 4
+    notch_freq = 60.0
+    notch_width = 5.0
+
+    # Apply a Fast Fourier Transform (FFT) to the signal to convert it to the frequency domain
+    signal_freq = np.fft.fft(signal)
+
+    # Define the frequency axis
+    freq_axis = np.fft.fftfreq(len(signal_freq), 1/fs)
+
+    # Create a bandpass Butterworth filter in the frequency domain
+    nyquist = 0.5 * fs
+    low = lowcut / nyquist
+    high = highcut / nyquist
+    b_bandpass, a_bandpass = butter(order, [low, high], btype='band')
+
+    # Create a notch filter in the frequency domain
+    notch_start = (notch_freq - notch_width) / nyquist
+    notch_stop = (notch_freq + notch_width) / nyquist
+    b_notch, a_notch = butter(order, [notch_start, notch_stop], btype='bandstop')
+
+    # Apply the bandpass and notch filters to the signal in the frequency domain
+    filtered_signal_freq = filtfilt(b_bandpass, a_bandpass, signal_freq)
+    filtered_signal_freq = filtfilt(b_notch, a_notch, filtered_signal_freq)
+
+    # Apply an inverse FFT to the filtered signal to convert it back to the time domain
+    filtered_signal = np.real(np.fft.ifft(filtered_signal_freq))
+
+    return filtered_signal
+
+from PyQt5.QtWidgets import QApplication, QFileDialog
+
+# Create a QApplication instance
+app = QApplication([])
+
+# Open a file dialog box to select the CSV file with the raw ABR data
+uploaded_file, _ = QFileDialog.getOpenFileName(None, "Select csv file with raw ABR data", "", "CSV files (*.csv)")
+
+# Load the raw ABR data from the selected CSV file
+raw_data = pd.read_csv(uploaded_file, usecols=range(9)) # this means I will have 9 columns
+
+# Rename the columns to the desired headers
+raw_data.columns = ['time (ms)', '90 dB SPL', '80 dB SPL', '70 dB SPL',
+                    '60 dB SPL', '50 dB SPL', '40 dB SPL',
+                    '30 dB SPL', '20 dB SPL']
+
+# Extract the sampling rate and signal from the raw data
+fs = raw_data['time (ms)'][0]
+signal = raw_data.loc[:, raw_data.columns.str.contains('dB SPL')]
+
+# Define the sound levels to test
+levels = np.arange(90, 20, -10)
+
+# Initialize arrays to store the peak-to-peak amplitudes
+ppa = np.zeros(len(levels))
+signal_ppa = np.zeros(len(levels))
+noise_ppa = np.zeros(len(levels))
+
+# Set the length of the window to be analyzed
+window_length = int(0.04 * fs)
+
+# Iterate over the sound levels
+for i, level in enumerate(levels):
+   
+    # Calculate the threshold sound level
+    threshold = level - 10*np.log10(np.mean(np.square(filter_signal(signal, fs))))
+   
+    # Calculate the threshold sound level
+    response = filter_signal(signal, fs)
+   
+    # Define the start and end points of the signal and noise windows
+    signal_start = 17 # 17 ms
+    signal_end = int(0.022 * fs) # 22 ms
+    noise_start = int(0.032 * fs) # 32 ms
+    noise_end = int(0.037 * fs) # 37 ms
+
+    # Extract the signal and noise windows
+    signal_window = response[signal_start:signal_end]
+    noise_window = response[noise_start:noise_end]
+
+    # Find the peaks in the signal and noise windows
+    signal_peaks, _ = find_peaks(signal_window, height=0)
+    noise_peaks, _ = find_peaks(noise_window, height=0)
+
+    # Calculate the peak-to-peak amplitudes for both the signal and noise windows
+    signal_ppa[i] = np.max(signal_window[signal_peaks]) - np.min(signal_window[signal_peaks])
+    noise_ppa[i] = np.max(noise_window[noise_peaks]) - np.min(noise_window[noise_peaks])
+
+    # Store the ratio of the signal PPA to the noise PPA
+    ppa[i] = signal_ppa[i] / noise_ppa[i]
+
+# Plot the signal-to-noise ratio as a function of sound level
+plt.subplot(2, 1, 1)
+plt.plot(levels, ppa)
+plt.xlabel('Sound level (dB SPL)')
+plt.ylabel('Signal-to-noise ratio')
+
+# Plot the peak-to-peak amplitudes as a function of sound level
+plt.subplot(2, 1, 2)
+plt.plot(levels, signal_ppa, label='Signal')
+plt.plot(levels, noise_ppa, label='Noise')
+plt.legend()
+plt.xlabel('Sound level (dB SPL)')
+plt.ylabel('Peak-to-peak amplitude (uV)')
+plt.show()
+
+#In the given code, the threshold sound level is found by comparing the peak-to-peak amplitudes (PPA)
+#of the signal and the noise. The PPA is calculated for both the signal and the noise windows, and the
+#ratio of the signal PPA to the noise PPA is stored for each sound level. The threshold sound level is
+#then found as the sound level at which the difference between the signal PPA and the noise PPA is the
+#smallest. This is done using the np.argmin function, which returns the index of the minimum value in an
+#array. In this specific case, the threshold sound level is the sound level at which the peak-to-peak
+#amplitude of the signal is closest to the peak-to-peak amplitude of the noise. This is determined by
+#finding the index of the minimum difference between the two amplitudes using
+#np.argmin(np.abs(signal_ppa - noise_ppa)). Once the index is found, the corresponding sound level is
+#extracted from the levels array.
+
+# Find the threshold sound level
+threshold_index = np.argmin(np.abs(signal_ppa - noise_ppa))
+threshold_sound_level = levels[threshold_index]
+print('ABR threshold: {} dB SPL'.format(threshold_sound_level))
